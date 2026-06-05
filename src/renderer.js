@@ -3,11 +3,12 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { linkMediaToWorkdir } from './media.js';
 
 // Regex to extract frame progress from Hyperframes stderr
 const FRAME_REGEX = /Streaming frame\s*(\d+)\s*\/\s*(\d+)/;
 
-export async function renderVideo({ html, audio, audioVolume, fps, resolution }, onProgress) {
+export async function renderVideo({ html, audio, audioVolume, fps, resolution, media }, onProgress) {
   const jobId = randomUUID().slice(0, 8);
   const workDir = join(process.env.WORKDIR || '/tmp/mcp-render-jobs', jobId);
   const assetsDir = join(workDir, 'assets');
@@ -19,6 +20,16 @@ export async function renderVideo({ html, audio, audioVolume, fps, resolution },
   try {
     // Decode HTML from base64
     let htmlContent = Buffer.from(html, 'base64').toString('utf-8');
+
+    // Link media from cache into workdir assets
+    const mediaPaths = {};
+    if (media && media.length > 0) {
+      for (const m of media) {
+        const relPath = await linkMediaToWorkdir(m.media_id, workDir);
+        mediaPaths[m.media_id] = relPath;
+        console.log(`[renderer] Linked media ${m.media_id} → ${relPath}`);
+      }
+    }
 
     // Inject audio if provided — write file and add <audio> element
     if (audio) {
