@@ -8,6 +8,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createStorage } from './storage.js';
 import { renderVideo } from './renderer.js';
 import { downloadMedia, listCachedMedia, removeCachedMedia, saveMeta, loadMeta } from './media.js';
+import { getVideoInfo, formatVideoInfo, getSubtitles, searchYouTube, getThumbnail } from './youtube.js';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, rm, mkdir, unlink, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -452,6 +453,113 @@ Accepts base64-encoded HTML (same format as render_video). Returns lint output a
         }),
       }],
     };
+  });
+
+  // ─── Tool: video_info ──────────────────────────────────────────────
+  server.registerTool('video_info', {
+    title: 'Video Info & Analytics',
+    description: `Get full metadata and analytics for a YouTube (or yt-dlp compatible) video.
+
+Returns: title, channel, duration, views, likes, description, upload date, categories, tags, chapters, available subtitles, thumbnails, formats, AND the **heat map** (most replayed sections — top 5 peaks with timestamps and intensity %).
+
+Pass any YouTube URL, video ID, or yt-dlp compatible URL.`,
+    inputSchema: {
+      url: z.string().describe('YouTube video URL or video ID (e.g., "https://youtube.com/watch?v=xxx" or just "xxx")'),
+    },
+  }, async ({ url }) => {
+    try {
+      // Handle bare video IDs
+      if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+        url = `https://www.youtube.com/watch?v=${url}`;
+      }
+      const raw = await getVideoInfo(url);
+      const formatted = formatVideoInfo(raw);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(formatted, null, 2),
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Video info failed: ${err.message}` }], isError: true };
+    }
+  });
+
+  // ─── Tool: get_subtitles ──────────────────────────────────────────
+  server.registerTool('get_subtitles', {
+    title: 'Get Subtitles / Captions',
+    description: `Download subtitles or auto-generated captions for a YouTube video. Returns SRT text.
+
+Use video_info first to see available subtitle languages.`,
+    inputSchema: {
+      url: z.string().describe('YouTube video URL or video ID'),
+      lang: z.string().default('en').describe('Subtitle language code (default: en). Use "en.*" for any English variant.'),
+      auto: z.boolean().default(false).describe('Use auto-generated captions if manual subtitles not available (default: false).'),
+    },
+  }, async ({ url, lang, auto }) => {
+    try {
+      if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+        url = `https://www.youtube.com/watch?v=${url}`;
+      }
+      const result = await getSubtitles(url, lang, auto);
+      return {
+        content: [{
+          type: 'text',
+          text: `Subtitles (${result.language}, ${result.auto ? 'auto-generated' : 'manual'}, ${result.format}):\n\n${result.content}`,
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Subtitle download failed: ${err.message}` }], isError: true };
+    }
+  });
+
+  // ─── Tool: search_videos ─────────────────────────────────────────
+  server.registerTool('search_videos', {
+    title: 'Search Videos',
+    description: `Search YouTube and return top results with metadata (title, channel, duration, views, upload date, thumbnail). Uses yt-dlp's ytsearch.`,
+    inputSchema: {
+      query: z.string().describe('Search query'),
+      max_results: z.number().min(1).max(20).default(5).describe('Number of results to return (1-20, default: 5).'),
+    },
+  }, async ({ query, max_results }) => {
+    try {
+      const results = await searchYouTube(query, max_results);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(results, null, 2),
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Search failed: ${err.message}` }], isError: true };
+    }
+  });
+
+  // ─── Tool: get_thumbnail ─────────────────────────────────────────
+  server.registerTool('get_thumbnail', {
+    title: 'Get Thumbnail',
+    description: `Download a video thumbnail into the media cache. Returns a media_id for use in render_video compositions.
+
+Best thumbnail under the specified max width is selected. Cached — repeated calls for the same video return instantly.`,
+    inputSchema: {
+      url: z.string().describe('YouTube video URL or video ID'),
+      max_width: z.number().default(1280).describe('Maximum thumbnail width in pixels (default: 1280).'),
+    },
+  }, async ({ url, max_width }) => {
+    try {
+      if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+        url = `https://www.youtube.com/watch?v=${url}`;
+      }
+      const result = await getThumbnail(url, max_width);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: 'text', text: `Thumbnail failed: ${err.message}` }], isError: true };
+    }
   });
 
   return server;
