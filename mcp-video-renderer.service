@@ -8,6 +8,8 @@ User=hermes
 WorkingDirectory=/var/lib/hermes/mcp-video-renderer
 Environment=NODE_ENV=production
 EnvironmentFile=/var/lib/hermes/mcp-video-renderer/.env
+Environment=PATH=/var/lib/hermes/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=/var/lib/hermes/.hermes/hermes-agent/venv/lib/python3.12/site-packages
 ExecStart=/usr/bin/node /var/lib/hermes/mcp-video-renderer/src/index.js
 Restart=on-failure
 RestartSec=5

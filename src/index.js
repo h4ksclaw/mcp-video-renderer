@@ -50,7 +50,7 @@ function run(cmd, args, timeout = 120, allowNonZero = false) {
       if (code === 0 || allowNonZero) {
         resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code });
       } else {
-        reject(new Error(`${cmd} failed (exit ${code}): ${stderr.slice(-1000)}`));
+        reject(new Error(`${cmd} failed (exit ${code}): ${stderr.slice(-500) || stdout.slice(-500)}`));
       }
     });
     proc.on('error', reject);
@@ -316,6 +316,9 @@ OUTPUT: Returns a new media_id for the transparent version. Pass this media_id i
       }
 
       const isImage = /\.(jpg|jpeg|png|webp)$/i.test(inputFile);
+      if (!isImage && format === 'png') {
+        return { content: [{ type: 'text', text: `Cannot use PNG format for video input. Use 'webm' or 'mov' for video, 'png' is for images only.` }], isError: true };
+      }
       const outFormat = isImage ? 'png' : format;
       const tmpId = randomUUID().slice(0, 8);
       const outputPath = `/tmp/rmbg-out-${tmpId}.${outFormat}`;

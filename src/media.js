@@ -9,7 +9,8 @@ import { randomUUID } from 'node:crypto';
 
 const CACHE_DIR = process.env.MEDIA_CACHE_DIR || join(homedir(), '.cache', 'mcp-video-renderer', 'media');
 const YTDLP_COOKIES = process.env.YTDLP_COOKIES || '';
-const YTDLP_FORMAT = process.env.YTDLP_FORMAT || 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
+const YTDLP_FORMAT = process.env.YTDLP_FORMAT || 'best[height<=720][ext=mp4]/best[height<=720]/best';
+const YTDLP_PATH = process.env.YTDLP_PATH || 'yt-dlp';
 
 // Ensure cache dir exists
 async function ensureCache() {
@@ -35,7 +36,7 @@ function metaPath(mediaId) {
   return join(CACHE_DIR, `${mediaId}.meta.json`);
 }
 
-// Run a command and return stdout
+// Run a command and return { stdout, stderr }
 function run(cmd, args, timeout = 300) {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args, {
@@ -46,7 +47,7 @@ function run(cmd, args, timeout = 300) {
     proc.stdout.on('data', d => { stdout += d.toString(); });
     proc.stderr.on('data', d => { stderr += d.toString(); });
     proc.on('close', (code) => {
-      if (code === 0) resolve(stdout.trim());
+      if (code === 0) resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
       else reject(new Error(`${cmd} failed (exit ${code}): ${stderr.slice(-500)}`));
     });
     proc.on('error', reject);
@@ -55,7 +56,7 @@ function run(cmd, args, timeout = 300) {
 
 // Get media info via ffprobe
 async function probeInfo(filePath) {
-  const json = await run('ffprobe', [
+  const { stdout: json } = await run('ffprobe', [
     '-v', 'quiet', '-print_format', 'json',
     '-show_format', '-show_streams',
     filePath,
@@ -160,11 +161,22 @@ export async function downloadMedia({ url, start, end }) {
     }
 
     ytdlpArgs.push(url);
-    await run('yt-dlp', ytdlpArgs, 600);
+    try {
+      await run(YTDLP_PATH, ytdlpArgs, 600);
+    } catch (err) {
+      // Clean up .part/.temp files on failure
+      try { const files = await readdir(CACHE_DIR); for (const f of files) { if (f.startsWith(`raw_${rawId}`)) await unlink(join(CACHE_DIR, f)); } } catch {}
+      throw err;
+    }
   }
 
   // Verify download
-  const rawStat = await stat(rawFile);
+  let rawStat;
+  try {
+    rawStat = await stat(rawFile);
+  } catch {
+    throw new Error(`Download failed: output file not found at ${rawFile}. yt-dlp may have produced no output or a different filename.`);
+  }
   if (rawStat.size < 100) {
     throw new Error(`Download produced empty/tiny file (${rawStat.size} bytes) from ${url}`);
   }
@@ -224,6 +236,7 @@ export async function downloadMedia({ url, start, end }) {
   await saveMeta(mediaId, meta);
 
   console.log(`[media] Cached: ${mediaId} → ${filename} (${meta.duration.toFixed(1)}s, ${meta.width}x${meta.height})`);
+  meta.html_hint = `Reference in HTML as: src="assets/${filename}" and pass media_id "${mediaId}" in render_video's media array.`;
   return meta;
 }
 
@@ -238,10 +251,8 @@ export async function linkMediaToWorkdir(mediaId, workdir) {
   const assetsDir = join(workdir, 'assets');
   await mkdir(assetsDir, { recursive: true });
 
-  // Use a clean filename for the workdir
-  const ext = extname(meta.filename) || '.mp4';
-  const workName = `video_${mediaId}${ext}`;
-  const workPath = join(assetsDir, workName);
+  // Use the original cached filename so HTML can reference assets/${meta.filename}
+  const workPath = join(assetsDir, meta.filename);
 
   try {
     // Try symlink first (fast, no copy)
@@ -258,7 +269,7 @@ export async function linkMediaToWorkdir(mediaId, workdir) {
     }
   }
 
-  return `assets/${workName}`;
+  return `assets/${meta.filename}`;
 }
 
 /**
